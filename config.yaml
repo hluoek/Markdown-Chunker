@@ -1,0 +1,9 @@
+chunking_rules:
+  max_tokens: 500
+  overlap_tokens: 50
+  encoding_name: "cl100k_base"
+  cross_header_merge_allowed: true
+
+element_processing:
+  table_header_retention: true
+  enrich_enabled: true
