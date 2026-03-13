@@ -12,6 +12,15 @@ from segmenter import BlockSplitter
 # --- 智能 Markdown 树形拆分器 ---
 
 class SmartMarkdownTreeSplitter:
+    _RE_FRONT_MATTER = re.compile(r"^---\s*\n([\s\S]*?)\n---\s*\n")
+    _RE_COUNT_CODE = re.compile(r"(```(\w+)?\n[\s\S]*?\n```)")
+    _RE_COUNT_TABLE = re.compile(r"(?m)(^\s*\|.*\|[ \t]*[\r\n]+\s*\|[\s\-\|:]+\|[ \t]*[\r\n]+(?:\s*\|.*\|[ \t]*(?:[\r\n]+|$))*)")
+    _RE_SPLIT_CODE = re.compile(r'(?m)(^```[^\n]*\n[\s\S]*?\n^```[^\n]*$)')
+    _RE_SPLIT_TABLE = re.compile(r'((?:[^\n]*\|[^\n]*\n)+[^\n]*\|[^\n]*)')
+    _RE_TABLE_SEP = re.compile(r"\|[-:]+\|")
+    _RE_WHITESPACE = re.compile(r"\s")
+    _RE_PARA_SPLIT = re.compile(r'\n\s*\n')
+
     def __init__(self, config_path: str = "markdown_chunker/config.yaml"):
         # 从 YAML 加载拆分参数，并初始化 tokenizer
         self.config = SplitterConfig.from_yaml(config_path)
@@ -32,8 +41,7 @@ class SmartMarkdownTreeSplitter:
 
     def _extract_front_matter(self, content: str) -> Tuple[dict, str]:
         """提取并移除 Markdown 开头的 Front Matter"""
-        pattern = r"^---\s*\n([\s\S]*?)\n---\s*\n"
-        match = re.match(pattern, content)
+        match = self._RE_FRONT_MATTER.match(content)
         if match:
             yaml_content = match.group(1)
             try:
@@ -47,11 +55,8 @@ class SmartMarkdownTreeSplitter:
 
     def _count_elements(self, text: str) -> Tuple[int, int]:
         """统计完整的代码块和表格数量"""
-        code_pattern = r"(```(\w+)?\n[\s\S]*?\n```)"
-        table_pattern = r"(?m)(^\s*\|.*\|[ \t]*[\r\n]+\s*\|[\s\-\|:]+\|[ \t]*[\r\n]+(?:\s*\|.*\|[ \t]*(?:[\r\n]+|$))*)"
-        
-        code_blocks = len(re.findall(code_pattern, text))
-        tables = len(re.findall(table_pattern, text))
+        code_blocks = len(self._RE_COUNT_CODE.findall(text))
+        tables = len(self._RE_COUNT_TABLE.findall(text))
         return code_blocks, tables
 
     def _build_ast(self, text: str, title: Optional[str]) -> Node:
@@ -116,10 +121,8 @@ class SmartMarkdownTreeSplitter:
 
     def _split_by_elements(self, text: str, title: Optional[str], hierarchy: Dict) -> Node:
         # 使用 (?m) 多行模式，要求 ``` 必须在行首，防止将结束 ``` 误认为下一个代码块的开头
-        code_pattern = r'(?m)(^```[^\n]*\n[\s\S]*?\n^```[^\n]*$)'
-        table_pattern = r'((?:[^\n]*\|[^\n]*\n)+[^\n]*\|[^\n]*)'
-        pattern = f'{code_pattern}|{table_pattern}'
-        parts = re.split(pattern, text)
+        combined = re.compile(f'{self._RE_SPLIT_CODE.pattern}|{self._RE_SPLIT_TABLE.pattern}')
+        parts = combined.split(text)
         children: List[Node] = []
         for part in parts:
             if not part or part.strip() == '':
@@ -139,8 +142,8 @@ class SmartMarkdownTreeSplitter:
                     )
                 )
                 continue
-            normalized = re.sub(r"\s", "", part_stripped)
-            if '|' in part_stripped and '\n' in part_stripped and re.search(r"\|[-:]+\|", normalized):
+            normalized = self._RE_WHITESPACE.sub("", part_stripped)
+            if '|' in part_stripped and '\n' in part_stripped and self._RE_TABLE_SEP.search(normalized):
                 needs_split = self._count_tokens(part_stripped) > self.config.chunking_rules.max_tokens
                 children.append(
                     Node(
@@ -154,7 +157,7 @@ class SmartMarkdownTreeSplitter:
                     )
                 )
                 continue
-            paragraphs = re.split(r'\n\s*\n', part_stripped)
+            paragraphs = self._RE_PARA_SPLIT.split(part_stripped)
             for p in paragraphs:
                 paragraph = p.strip()
                 if paragraph:
@@ -259,15 +262,7 @@ class SmartMarkdownTreeSplitter:
             sorted_hierarchy = self._sort_hierarchy(node.hierarchy)
             merged_hierarchy.append(sorted_hierarchy)
         
-        path_parts: List[str] = []
-        vals: List[str] = []
-        for hierarchy in merged_hierarchy:
-            vals.clear()
-            for value in hierarchy.values():
-                vals.append(str(value).strip())
-            part = "/".join(vals)
-            path_parts.append(part)
-        return path_parts
+        return ["/".join(str(v).strip() for v in h.values()) for h in merged_hierarchy]
 
     def _longest_common_prefix_segments(self, split_paths: List[List[str]]) -> List[str]:
         if not split_paths:
@@ -284,11 +279,7 @@ class SmartMarkdownTreeSplitter:
 
     def _hierarchy_to_text(self, hierarchy_paths: List[str]) -> str:
 
-        unique_paths: List[str] = []
-        for path in hierarchy_paths:
-            p = str(path).strip()
-            if p and p not in unique_paths:
-                unique_paths.append(p)
+        unique_paths = list(dict.fromkeys(str(p).strip() for p in hierarchy_paths if str(p).strip()))
         if not unique_paths:
             return ""
 
@@ -300,10 +291,7 @@ class SmartMarkdownTreeSplitter:
         if not split_paths:
             return ""
 
-        roots: List[str] = []
-        for parts in split_paths:
-            if parts[0] not in roots:
-                roots.append(parts[0])
+        roots = list(dict.fromkeys(parts[0] for parts in split_paths))
         root_text = roots[0] if len(roots) == 1 else "、".join(roots)
 
         lcp = self._longest_common_prefix_segments(split_paths)
@@ -312,11 +300,9 @@ class SmartMarkdownTreeSplitter:
         if len(lcp) > 1:
             lines.append(f"[所属章节] {'/'.join(lcp)}")
 
-        suffixes: List[str] = []
-        for parts in split_paths:
-            suffix = "/".join(parts[len(lcp):]) if len(parts) > len(lcp) else ""
-            if suffix and suffix not in suffixes:
-                suffixes.append(suffix)
+        suffixes = list(dict.fromkeys(
+            "/".join(parts[len(lcp):]) for parts in split_paths if len(parts) > len(lcp)
+        ))
 
         if suffixes:
             lines.append(f"[包含模块] {', '.join(suffixes)}")
@@ -372,10 +358,7 @@ class SmartMarkdownTreeSplitter:
         if merged_title:
             metadata["title"] = merged_title
         if hierarchy_paths:
-            dedup_hierarchy_paths: List[str] = []
-            for path in hierarchy_paths:
-                if path not in dedup_hierarchy_paths:
-                    dedup_hierarchy_paths.append(path)
+            dedup_hierarchy_paths = list(dict.fromkeys(hierarchy_paths))
             if dedup_hierarchy_paths:
                 metadata["hierarchy"] = dedup_hierarchy_paths
             
@@ -409,14 +392,7 @@ class SmartMarkdownTreeSplitter:
                     max_level = level
 
         new_level_key = f"h{max_level + 1}"
-        type_value = node.node_type
-        if node.node_type == "code":
-            type_value = "code"
-        elif node.node_type == "table":
-            type_value = "table"
-        elif node.node_type == "text":
-            type_value = "text"
-        current_hierarchy[new_level_key] = type_value
+        current_hierarchy[new_level_key] = node.node_type
         hierarchy_paths = self._merge_node_hierarchies([Node(content="", hierarchy=current_hierarchy)])
 
         if hierarchy_paths:
@@ -470,6 +446,5 @@ class SmartMarkdownTreeSplitter:
         for chunk in final_chunks:
             if path:
                 chunk.metadata["path"] = path
-            
-        self._enrich_doc_with_hierarchy_text(chunk)
+            self._enrich_doc_with_hierarchy_text(chunk)
         return final_chunks

@@ -6,28 +6,28 @@ class BlockSplitter:
     def __init__(self, config: SplitterConfig, tokenizer: Any):
         self.config = config
         self.tokenizer = tokenizer
-
-    def _count_tokens(self, text: str) -> int:
-        return len(self.tokenizer.encode(text))
-
-    def split_text_block(self, node: Node) -> List[Node]:
-        '''文本块切分，支持按中文和英文标点切分'''
-        text_splitter = RecursiveCharacterTextSplitter(
+        self._text_splitter = RecursiveCharacterTextSplitter(
             separators=[
                 "\n\n", "\n",
                 "。", "！", "？", "；",  # 加上中文分号
                 ". ", "! ", "? ", "; ",
-                "，", ", ", 
-                " ",              
-                ""                
+                "，", ", ",
+                " ",
+                ""
             ],
             chunk_size=self.config.chunking_rules.max_tokens,
             chunk_overlap=self.config.chunking_rules.overlap_tokens,
             length_function=self._count_tokens,
             keep_separator=True
         )
+        self._code_splitters: Dict[Language, RecursiveCharacterTextSplitter] = {}
 
-        split_texts = text_splitter.split_text(node.content)
+    def _count_tokens(self, text: str) -> int:
+        return len(self.tokenizer.encode(text))
+
+    def split_text_block(self, node: Node) -> List[Node]:
+        '''文本块切分，支持按中文和英文标点切分'''
+        split_texts = self._text_splitter.split_text(node.content)
 
         nodes: List[Node] = []
         for text in split_texts:
@@ -52,19 +52,16 @@ class BlockSplitter:
         lang_str = lines[0].strip().removeprefix("```").strip() or "text"
         inner_code = "\n".join(lines[1:-1])
 
-        # 尝试映射到 LangChain 支持的 Language 枚举
+        # 尝试映射到 LangChain 支持的 Language 枚举，按语言缓存 splitter
         lc_lang = self._get_langchain_language(lang_str)
-        
-        # 使用 RecursiveCharacterTextSplitter 进行切分
-        splitter = RecursiveCharacterTextSplitter.from_language(
-            language=lc_lang,
-            chunk_size=self.config.chunking_rules.max_tokens,
-            chunk_overlap=self.config.chunking_rules.overlap_tokens,
-            length_function=self._count_tokens
-        )
-        
-        # 切分代码内容
-        split_texts = splitter.split_text(inner_code)
+        if lc_lang not in self._code_splitters:
+            self._code_splitters[lc_lang] = RecursiveCharacterTextSplitter.from_language(
+                language=lc_lang,
+                chunk_size=self.config.chunking_rules.max_tokens,
+                chunk_overlap=self.config.chunking_rules.overlap_tokens,
+                length_function=self._count_tokens
+            )
+        split_texts = self._code_splitters[lc_lang].split_text(inner_code)
         
         # 将切分后的文本块重新封装为 Node
         nodes: List[Node] = []

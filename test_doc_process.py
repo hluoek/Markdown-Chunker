@@ -7,10 +7,6 @@ def process_single_file(input_path: str, output_dir: str, config_path: str) -> N
     """
     处理单个Markdown文件，生成块并保存到输出目录。
     """
-    if not os.path.exists(input_path):
-        print(f"错误: 输入文件不存在: {input_path}")
-        return
-
     splitter = SmartMarkdownTreeSplitter(config_path=config_path)
 
     try:

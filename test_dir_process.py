@@ -20,6 +20,10 @@ def process_directories(source_roots: List[str], output_root: str, config_path: 
             continue
 
         for current_dir, _, files in os.walk(source_root):
+            rel_dir = os.path.relpath(current_dir, os.path.join(os.path.dirname(config_path), "docs"))
+            target_dir = os.path.join(output_root, rel_dir)
+            os.makedirs(target_dir, exist_ok=True)
+
             for name in files:
                 if not name.lower().endswith(".md"):
                     continue
@@ -37,12 +41,7 @@ def process_directories(source_roots: List[str], output_root: str, config_path: 
                 total_files += 1
                 total_chunks += len(chunks)
 
-                rel_dir = os.path.relpath(current_dir, os.path.join(os.path.dirname(config_path), "docs"))
-                target_dir = os.path.join(output_root, rel_dir)
-                os.makedirs(target_dir, exist_ok=True)
-
-                output_name = f"chunk_{os.path.splitext(name)[0]}.jsonl"
-                output_path = os.path.join(target_dir, output_name)
+                output_path = os.path.join(target_dir, f"chunk_{os.path.splitext(name)[0]}.jsonl")
 
                 with open(output_path, "w", encoding="utf-8") as out:
                     for chunk in chunks:
